@@ -14,7 +14,7 @@ load_dotenv()
 # Configuration
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-MODEL = "llama-3.1-8b-instant"
+MODEL = "llama-3.3-70b-versatile"  # More reliable for multi-tool calls than 8b
 
 async def get_mcp_tools() -> List[StructuredTool]:
     """Fetch tools from the gateway and convert them to LangChain StructuredTools"""
@@ -123,22 +123,40 @@ async def main():
         "You are a helpful assistant with access to various external tools via MCP. "
         "When you need to fetch information, use the specific tool available. "
         "For GitHub repository details, use the 'get_repo_info' tool. "
-        "For database queries, use the 'query_db' tool."
+        "For database queries, follow these steps in order: "
+        "1. Call 'get_all_tables' (no arguments) to list all tables. "
+        "2. Call 'get_table_schema' with the table_name argument to get columns for a specific table. "
+        "3. Call 'execute_query' with the sql argument to run your query. "
+        "Never pass arguments to 'get_all_tables' — it takes no parameters."
     )
     
     app = create_react_agent(llm, tools, prompt=system_message)
 
-    # 4. Run interaction
-    user_input = "What is the info for the repository 'https://github.com/MeetGJethva/browser-aware-ai-assistant'?"
-    print(f"\nUser: {user_input}")
-    
-    # LangGraph returns a stream of events or the final state
-    inputs = {"messages": [("user", user_input)]}
-    async for event in app.astream(inputs, stream_mode="values"):
-        final_event = event
+    # 4. Run interaction — maintain conversation history across turns
+    conversation_history = []
 
-    final_message = final_event["messages"][-1]
-    print(f"\nAssistant: {final_message.content}")
+    while True:
+        user_input = input("\nUser: ")
+        if user_input.strip().lower() in ("exit", "quit", "q"):
+            print("Goodbye!")
+            break
+
+        conversation_history.append(("user", user_input))
+
+        inputs = {"messages": conversation_history}
+        final_event = None
+        async for event in app.astream(inputs, stream_mode="values"):
+            final_event = event
+
+        if final_event is None:
+            print("Assistant: (no response)")
+            continue
+
+        final_message = final_event["messages"][-1]
+        print(f"\nAssistant: {final_message.content}")
+
+        # Append the assistant's reply to keep history
+        conversation_history.append(("assistant", final_message.content))
 
 if __name__ == "__main__":
     asyncio.run(main())
